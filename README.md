@@ -38,6 +38,7 @@ Access and control the Android emulator directly in your web browser with the in
   - [Using Desktop scrcpy](#use-scrcpy-to-mirror-the-emulator-screen)
   - [Customizing Device Screen](#customizing-device-screen)
 - [Changing the Magisk Version](#-changing-the-magisk-version)
+- [Changing the Android System Image](#-changing-the-android-system-image)
 - [First Boot Process](#-first-boot-process)
 - [Container Logs](#-container-logs)
 - [Versioning and Releases](#-versioning-and-releases)
@@ -204,6 +205,68 @@ To switch to a different version (e.g. a newer release or an older one for compa
     ```bash
     adb connect localhost:5555
     adb shell magisk -c    # prints e.g. 30.7:MAGISK:R (30700)
+    ```
+
+
+## 📱 **Changing the Android System Image**
+
+The Android version that runs inside the emulator is selected at build time via three build arguments in the [Dockerfile](Dockerfile):
+
+| Build arg | Description | Example values |
+| --- | --- | --- |
+| `ANDROID_API` | Android API level | `30` (Android 11), `33` (Android 13), `34` (Android 14) |
+| `ANDROID_TAG` | System image variant | `default`, `google_apis`, `google_apis_playstore` |
+| `ANDROID_ABI` | CPU ABI | `x86_64` |
+
+These produce the SDK image id `system-images;android-${ANDROID_API};${ANDROID_TAG};${ANDROID_ABI}`, which is downloaded during the build and used to create the AVD and patch the ramdisk for root.
+
+### Variant compatibility (important)
+
+| Variant | Google services | Rootable? | How root works |
+| --- | --- | --- | --- |
+| `default` | None (AOSP) | ✅ Yes | `adb root` (userdebug build) |
+| `google_apis` | GMS, no Play Store | ✅ Yes | `adb root` (userdebug build) |
+| `google_apis_playstore` | GMS + Play Store | ⚠️ Partial | **Production build** (`ro.debuggable=0`): `adb root` is blocked. The ramdisk is still patched and `magiskd` runs, but enabling `su` needs a **one-time manual step** (see below). **Play Integrity will fail** — use the integrity modules in `extras/` to mitigate. |
+
+> **Feature constraints:** `GAPPS_SETUP` (PICO GAPPS) and `ARM_TRANSLATION` (ndk_translation) only apply to **API 30 / x86_64**. For other API levels keep both at `0`. A `google_apis*` variant already provides Google services, so GAPPS is unnecessary there.
+
+> **Root on Play Store images (one-time setup):** On a `google_apis_playstore` image, production policy blocks `adb root`, so first boot leaves Magisk patched (`magiskd` running) but `su` disabled until Magisk's **"Additional Setup"** runs once. Use the helper script, which starts the container and drives that setup for you:
+>
+> ```bash
+> ./run.sh
+> ```
+>
+> If you prefer to do it by hand: open the **Magisk app** in the web UI (http://localhost:8000) → tap **"Requires Additional Setup"** → **OK** → let the device reboot. After that, `adb shell su` and root-requiring apps work. If you want **fully automated** root with no extra step, use `ANDROID_TAG=google_apis` (includes Google services, `adb root` works) instead.
+
+### How to switch
+
+1. **Build with the desired image:**
+
+    ```bash
+    docker compose build \
+      --build-arg ANDROID_API=34 \
+      --build-arg ANDROID_TAG=google_apis_playstore \
+      dockerify-android
+    ```
+
+    Or edit the `ARG ANDROID_API=...` / `ANDROID_TAG=...` defaults in the `Dockerfile` (and the matching `args:` block in `docker-compose.yml`).
+
+2. **Recreate the container with a clean data volume** (the AVD and root are tied to the image, so the old `data/` must be discarded):
+
+    ```bash
+    docker compose down dockerify-android
+    rm -rf data/android.avd data/.first-boot-done data/.root-done data/.arm-translation-done data/.gapps-done
+    docker compose up -d dockerify-android
+    ```
+
+3. **Verify** once booted (first boot is longer because it re-roots the new image):
+
+    ```bash
+    adb connect localhost:5555
+    adb shell getprop ro.build.version.sdk      # e.g. 34
+    adb shell pm list packages | grep vending    # com.android.vending → Play Store present
+    adb shell ps -A | grep magiskd               # magiskd running → Magisk is active
+    adb shell su -c id                           # uid=0 → root (Play Store: after the one-time setup above)
     ```
 
 

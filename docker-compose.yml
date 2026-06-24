@@ -4,6 +4,13 @@ services:
     container_name: dockerify-android
     build:
       context: .
+      # Android system image to bake in. Defaults to Android 14 Play Store.
+      # For the classic rootable AOSP image use: ANDROID_API=30, ANDROID_TAG=default
+      # (google_apis_playstore is a production build: no `adb root`, root via Magisk su).
+      args:
+        ANDROID_API: "34"
+        ANDROID_TAG: google_apis_playstore
+        ANDROID_ABI: x86_64
     ports:
       - "5555:5555"
     volumes:
@@ -16,9 +23,9 @@ services:
       #SCREEN_RESOLUTION: 720x720
       # Optional screen density (dpi)
       #SCREEN_DENSITY: 227
-      ROOT_SETUP: 1 # set to 1 to enable rooting
-      GAPPS_SETUP: 0 # set to 1 to install PICO GAPPS
-      ARM_TRANSLATION: 1 # set to 1 to enable ARM translation (allows ARM64 apps)
+      ROOT_SETUP: 1 # set to 1 to enable rooting (via Magisk su on Play Store images)
+      GAPPS_SETUP: 0 # PICO GAPPS — only for API 30; Play Store images already include Google
+      ARM_TRANSLATION: 0 # ndk_translation only applies to API 30 x86_64
     privileged: true
     devices:
       - /dev/kvm

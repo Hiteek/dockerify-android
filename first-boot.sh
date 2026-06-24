@@ -7,6 +7,71 @@ bool_true() {
   esac
 }
 
+# System image identifiers (set at build time via Dockerfile ARGs; defaults match
+# the original Android 11 setup so older builds keep working).
+ANDROID_API="${ANDROID_API:-30}"
+ANDROID_TAG="${ANDROID_TAG:-default}"
+ANDROID_ABI="${ANDROID_ABI:-x86_64}"
+SYSIMG_PKG="system-images;android-${ANDROID_API};${ANDROID_TAG};${ANDROID_ABI}"
+SYSIMG_PATH="system-images/android-${ANDROID_API}/${ANDROID_TAG}/${ANDROID_ABI}"
+
+# Whether `adb root` yields a privileged adbd. Empty until probed.
+#   - userdebug builds (default/google_apis): `adb root` works.
+#   - production builds (google_apis_playstore): it fails; we use Magisk `su` instead.
+ADB_ROOT_AVAILABLE=""
+ensure_root_adb() {
+  if [ -z "$ADB_ROOT_AVAILABLE" ]; then
+    if adb root 2>&1 | grep -q "cannot run as root"; then
+      ADB_ROOT_AVAILABLE=no
+    else
+      ADB_ROOT_AVAILABLE=yes
+    fi
+    adb wait-for-device
+  fi
+  [ "$ADB_ROOT_AVAILABLE" = yes ]
+}
+
+# Run a single privileged shell command string, via `adb root` if available,
+# otherwise through Magisk su (requires Magisk to be active).
+as_root() {
+  if ensure_root_adb; then
+    adb shell "$1"
+  else
+    adb shell su -c "$1"
+  fi
+}
+
+# Restart the QEMU process so the emulator reloads /data/android.avd/ramdisk.img.
+# `adb reboot` is NOT enough — the ramdisk is only read when QEMU starts, so a
+# freshly-patched ramdisk (Magisk) only activates after a full emulator restart.
+# Supervisor (autorestart) relaunches start-emulator.sh, which loads the patched img.
+restart_emulator_and_wait() {
+  pkill -f "qemu-system" 2>/dev/null
+  sleep 5
+  adb wait-for-device
+  ADB_ROOT_AVAILABLE=""   # adbd restarted; re-probe on next as_root
+  local c=""
+  until [ "$c" = "1" ]; do
+    c=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+    [ "$c" = "1" ] && break
+    sleep 3
+  done
+}
+
+# Wait until Magisk su grants root to the adb shell (uid 2000).
+wait_for_su() {
+  local i=0
+  until adb shell su -c id 2>/dev/null | grep -q 'uid=0'; do
+    i=$((i + 1))
+    if [ "$i" -ge 36 ]; then
+      echo "WARN: Magisk su not available after waiting; root bootstrap may fail."
+      return 1
+    fi
+    sleep 5
+  done
+  echo "Magisk su is available."
+}
+
 apply_settings() {
   adb wait-for-device
   # Waiting for the boot sequence to be completed.
@@ -15,7 +80,7 @@ apply_settings() {
     COMPLETED=$(adb shell getprop sys.boot_completed | tr -d '\r')
     sleep 5
   done
-  adb root
+  # `settings put` works as the adb shell user; no elevated privileges needed.
   adb shell settings put global window_animation_scale 0
   adb shell settings put global transition_animation_scale 0
   adb shell settings put global animator_duration_scale 0
@@ -25,9 +90,10 @@ apply_settings() {
   adb shell settings put global private_dns_mode hostname
   adb shell settings put global private_dns_specifier ${DNS:-one.one.one.one}
   adb shell settings put global airplane_mode_on 1
-  adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true
-  adb shell svc data disable
-  adb shell svc wifi enable
+  # These require root (or fail silently when no root is available).
+  as_root 'am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true'
+  as_root 'svc data disable'
+  as_root 'svc wifi enable'
 }
 
 prepare_system() {
@@ -105,47 +171,67 @@ install_gapps() {
 
 install_root() {
   adb wait-for-device
-  adb root
   echo "Root Script Starting..."
-  # Root the AVD by patching the ramdisk.
+  # Patch the ramdisk offline. rootAVD works inside /data/local/tmp, so this step
+  # needs no root and works on production (Play Store) images too.
   mkdir -p /tmp/rootavd
   tar -xzf /opt/rootavd.tar.gz --strip-components=1 -C /tmp/rootavd
   # Use the pinned Magisk version instead of the one bundled with rootAVD.
   cp /opt/Magisk.zip /tmp/rootavd/Magisk.zip
   pushd /tmp/rootavd
   sed -i 's/read -t 10 choice/choice=1/' rootAVD.sh
-  ./rootAVD.sh system-images/android-30/default/x86_64/ramdisk.img
-  cp /opt/android-sdk/system-images/android-30/default/x86_64/ramdisk.img /data/android.avd/ramdisk.img
-
-  # Pre-populate /data/adb/magisk so Magisk's env-check passes on next boot.
-  # rootAVD only patches the ramdisk; the "additional setup" tap in the Magisk
-  # app would normally extract Magisk.zip into /data/adb/magisk/ (with the
-  # lib*.so files renamed to their binary names). Doing it here means the next
-  # QEMU restart comes up with a complete Magisk environment, no manual setup
-  # prompt, and any modules in /data/adb/modules/ are loaded on boot.
-  echo "Bootstrapping Magisk environment ..."
-  rm -rf /tmp/magisk-stage
-  mkdir -p /tmp/magisk-stage
-  unzip -q -o Magisk.zip 'lib/*' 'assets/*' -d /tmp/magisk-stage
-  pushd /tmp/magisk-stage/lib/x86_64
-  for f in lib*.so; do mv "$f" "$(echo "$f" | sed -e 's/^lib//' -e 's/\.so$//')"; done
-  cp -f ../x86/libmagisk32.so magisk32 2>/dev/null || true
+  ./rootAVD.sh "$SYSIMG_PATH/ramdisk.img"
+  cp "/opt/android-sdk/$SYSIMG_PATH/ramdisk.img" /data/android.avd/ramdisk.img
   popd
-  adb push /tmp/magisk-stage/lib/x86_64/. /data/local/tmp/magiskbin/
-  adb push /tmp/magisk-stage/assets/.    /data/local/tmp/magiskbin/
-  adb shell '
-    mkdir -p /data/adb/magisk
-    cp -a /data/local/tmp/magiskbin/. /data/adb/magisk/
-    rm -f /data/adb/magisk/bootctl /data/adb/magisk/main.jar \
-          /data/adb/magisk/module_installer.sh /data/adb/magisk/uninstaller.sh
-    chmod -R 755 /data/adb/magisk
-    rm -rf /data/local/tmp/magiskbin
-  '
-  rm -rf /tmp/magisk-stage
 
-  popd
+  # Restart QEMU so the patched ramdisk loads and Magisk activates. On production
+  # builds `adb root` is unavailable, so root for the bootstrap below comes from
+  # Magisk's su, which only exists once the patched ramdisk is running.
+  echo "Restarting emulator to activate Magisk ..."
+  restart_emulator_and_wait
+
+  if wait_for_su; then
+    # su is available (userdebug `adb root`, or a Play Store image whose Magisk
+    # "additional setup" has already been completed). Pre-populate /data/adb/magisk
+    # so the env-check passes and the app stops prompting. The lib*.so files are
+    # renamed to their binary names (newer Magisk ships a single unified `magisk`).
+    echo "Bootstrapping Magisk environment ..."
+    rm -rf /tmp/magisk-stage
+    mkdir -p /tmp/magisk-stage
+    unzip -q -o /opt/Magisk.zip 'lib/*' 'assets/*' -d /tmp/magisk-stage
+    pushd /tmp/magisk-stage/lib/x86_64
+    for f in lib*.so; do mv "$f" "$(echo "$f" | sed -e 's/^lib//' -e 's/\.so$//')"; done
+    cp -f ../x86/libmagisk32.so magisk32 2>/dev/null || true
+    popd
+    adb push /tmp/magisk-stage/lib/x86_64/. /data/local/tmp/magiskbin/
+    adb push /tmp/magisk-stage/assets/.    /data/local/tmp/magiskbin/
+    as_root '
+      mkdir -p /data/adb/magisk
+      cp -a /data/local/tmp/magiskbin/. /data/adb/magisk/
+      rm -f /data/adb/magisk/bootctl /data/adb/magisk/main.jar \
+            /data/adb/magisk/module_installer.sh /data/adb/magisk/uninstaller.sh
+      chmod -R 755 /data/adb/magisk
+      rm -rf /data/local/tmp/magiskbin
+    '
+    rm -rf /tmp/magisk-stage
+    # Auto-grant su to the adb shell uid (2000) for headless follow-up steps.
+    as_root 'magisk --sqlite "REPLACE INTO policies (uid,policy,until,logging,notification) VALUES (2000,2,0,0,0)"' 2>/dev/null || true
+  else
+    # Production (Play Store) image: the ramdisk is patched and magiskd is running,
+    # but SELinux + production policy block the adb shell from reaching su, and the
+    # Magisk env can't be bootstrapped over adb (no `adb root`). This is expected.
+    # Root is finished by completing Magisk's one-time "Additional Setup" via the UI.
+    echo "============================================================"
+    echo "NOTE: Production (Play Store) image detected. Magisk is patched"
+    echo "      and magiskd is running, but su must be enabled once via the"
+    echo "      Magisk app: open it in scrcpy (http://localhost:8000),"
+    echo "      tap 'Requires Additional Setup' -> OK, let it reboot."
+    echo "      After that, 'adb shell su' works. See README for details."
+    echo "============================================================"
+  fi
+
   echo "Root Done"
-  sleep 10
+  sleep 5
   rm -rf /tmp/rootavd
   touch /data/.root-done
 }
@@ -271,18 +357,18 @@ if bool_true "$ARM_TRANSLATION" && [ ! -f /data/.arm-translation-done ]; then ar
 
 # Create the AVD on first boot only.
 if [ ! -f /data/.first-boot-done ]; then
-  echo "Init AVD ..."
-  echo "no" | avdmanager create avd -n android -k "system-images;android-30;default;x86_64"
+  echo "Init AVD ($SYSIMG_PKG) ..."
+  echo "no" | avdmanager create avd -n android -k "$SYSIMG_PKG"
 fi
 
 # Each install is self-contained: prepares the system, applies its changes,
 # reboots, waits for adbd, then writes its done-marker. Safe to run after the
 # first boot — only the missing markers will fire.
 #
-# Root is installed first so it can bootstrap /data/adb/magisk/; the gapps
-# and arm_translation installs then detect a ready Magisk env and write their
-# payload to /data/adb/modules/<id>/ instead of /system. Modules sit dormant
-# until the next QEMU restart loads the patched ramdisk and Magisk activates.
+# Root is installed first: it patches the ramdisk, restarts QEMU to activate
+# Magisk, then bootstraps /data/adb/magisk/. With Magisk live, the gapps and
+# arm_translation installs detect a ready env and write to /data/adb/modules/<id>/
+# instead of /system (those two only apply to API 30 x86_64 — see Dockerfile).
 [ "$root_needed" = true ]            && install_root
 [ "$gapps_needed" = true ]           && install_gapps
 [ "$arm_translation_needed" = true ] && install_arm_translation

@@ -22,8 +22,10 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Bake in Google ndk_translation prebuilts (ARM-on-x86 native bridge).
-# Source: Kaz205 fork (Chrome OS Android 11 / guybrush_cheets) — matches the emulator's API 30.
-# Stored as the upstream tarball; install_arm_translation extracts on demand.
+# Source: Kaz205 fork (Chrome OS Android 11 / guybrush_cheets) — matches API 30 / x86_64 ONLY.
+# Inactive unless ARM_TRANSLATION=1 AND the system image is API 30 x86_64; it does not
+# apply to other API levels (e.g. API 34). Stored as the upstream tarball; install_arm_translation
+# extracts on demand.
 ARG NDK_TRANSLATION_REPO=Kaz205/vendor_google_proprietary_ndk_translation-prebuilt
 ARG NDK_TRANSLATION_REF=chromeos_guybrush
 RUN wget -q -O /opt/ndk-translation.tar.gz \
@@ -58,6 +60,19 @@ ENV ANDROID_AVD_HOME=/data
 ENV ADB_DIR="$ANDROID_HOME/platform-tools"
 ENV PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ADB_DIR:$PATH"
 
+# Android system image selection. Override at build time, e.g.:
+#   docker compose build --build-arg ANDROID_API=30 --build-arg ANDROID_TAG=default
+# Compatibility notes:
+#   - ANDROID_TAG=default / google_apis  -> userdebug build, `adb root` works.
+#   - ANDROID_TAG=google_apis_playstore  -> production build, no `adb root`; root via Magisk `su`.
+#   - GAPPS and ARM translation only apply to API 30 x86_64 (see first-boot.sh).
+ARG ANDROID_API=34
+ARG ANDROID_TAG=google_apis_playstore
+ARG ANDROID_ABI=x86_64
+ENV ANDROID_API=${ANDROID_API}
+ENV ANDROID_TAG=${ANDROID_TAG}
+ENV ANDROID_ABI=${ANDROID_ABI}
+
 # Initializing the required directories.
 RUN mkdir /root/.android/ && \
 	touch /root/.android/repositories.cfg && \
@@ -69,8 +84,10 @@ RUN mkdir /root/.android/ && \
 #COPY emulator/package.xml /root/package.xml
 
 
-# Detect architecture and set environment variable
-RUN yes | sdkmanager --sdk_root=$ANDROID_HOME "emulator" "platform-tools" "platforms;android-30" "system-images;android-30;default;x86_64"
+# Install the SDK platform, emulator and the selected system image.
+RUN yes | sdkmanager --sdk_root=$ANDROID_HOME "emulator" "platform-tools" \
+    "platforms;android-${ANDROID_API}" \
+    "system-images;android-${ANDROID_API};${ANDROID_TAG};${ANDROID_ABI}"
 # remove /opt/android-sdk/emulator/crashpad_handler
 RUN rm -f /opt/android-sdk/emulator/crashpad_handler
 # RUN if [ "$(uname -m)" = "aarch64" ]; then \
