@@ -37,6 +37,7 @@ Access and control the Android emulator directly in your web browser with the in
   - [Using ADB](#connect-via-adb)
   - [Using Desktop scrcpy](#use-scrcpy-to-mirror-the-emulator-screen)
   - [Customizing Device Screen](#customizing-device-screen)
+- [Changing the Magisk Version](#-changing-the-magisk-version)
 - [First Boot Process](#-first-boot-process)
 - [Container Logs](#-container-logs)
 - [Versioning and Releases](#-versioning-and-releases)
@@ -172,6 +173,38 @@ scrcpy -s localhost:5555
 | `ROOT_SETUP` | Set to `1` to enable rooting and Magisk. Can be turned on after the first start but cannot be undone without recreating the data volume. | `0` |
 | `GAPPS_SETUP` | Set to `1` to install PICO GAPPS. Can be turned on after the first start but cannot be undone without recreating the data volume. | `0` |
 | `ARM_TRANSLATION` | Set to `1` to enable ARM translation (ndk_translation) for running ARM/ARM64 apps on x86_64. Can be turned on after the first start but cannot be undone without recreating the data volume. | `0` |
+
+
+## 🪄 **Changing the Magisk Version**
+
+The Magisk version is pinned via the `MAGISK_VERSION` build argument in the [Dockerfile](Dockerfile) (defaults to the version shown there). During the build, the matching Magisk release APK is downloaded from the [official Magisk releases](https://github.com/topjohnwu/Magisk/releases) and used to root the emulator, overriding the one bundled with rootAVD. Because rootAVD patches the ramdisk with that APK's own `magiskboot`/`magiskinit`, any Magisk version — newer or older — works.
+
+To switch to a different version (e.g. a newer release or an older one for compatibility):
+
+1. **Build with the desired version** (use any tag from the [Magisk releases page](https://github.com/topjohnwu/Magisk/releases)):
+
+    ```bash
+    docker compose build --build-arg MAGISK_VERSION=v30.7 dockerify-android
+    ```
+
+    Alternatively, edit the `ARG MAGISK_VERSION=...` line in the `Dockerfile` to make it the new default.
+
+2. **Recreate the container with a clean data volume** so the device is re-rooted with the new version:
+
+    ```bash
+    docker compose down dockerify-android
+    rm -rf data/android.avd data/.first-boot-done data/.root-done
+    docker compose up -d dockerify-android
+    ```
+
+    > **Important:** Magisk is only installed during the first-boot rooting step, which is guarded by the `data/.root-done` marker. If you change `MAGISK_VERSION` but keep an already-rooted `data/` volume, the device will **keep the old Magisk version** (and the Magisk app may show the daemon as `N/A` due to an app/daemon version mismatch). Removing the markers above forces a fresh root with the new version.
+
+3. **Verify the running version** once the emulator has booted:
+
+    ```bash
+    adb connect localhost:5555
+    adb shell magisk -c    # prints e.g. 30.7:MAGISK:R (30700)
+    ```
 
 
 ## 🔄 **First Boot Process**
