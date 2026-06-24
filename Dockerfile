@@ -36,12 +36,6 @@ ARG ROOTAVD_REF=master
 RUN wget -q -O /opt/rootavd.tar.gz \
     "https://gitlab.com/${ROOTAVD_REPO}/-/archive/${ROOTAVD_REF}/$(basename "$ROOTAVD_REPO")-${ROOTAVD_REF}.tar.gz"
 
-# Bake in a specific Magisk version, overriding the one bundled with rootAVD.
-# The Magisk APK is a valid zip — rootAVD and the bootstrap both consume it as Magisk.zip.
-ARG MAGISK_VERSION=v30.7
-RUN wget -q -O /opt/Magisk.zip \
-    "https://github.com/topjohnwu/Magisk/releases/download/${MAGISK_VERSION}/Magisk-${MAGISK_VERSION}.apk"
-
 # Set up Android SDK
 RUN mkdir -p /opt/android-sdk/cmdline-tools && \
     cd /opt/android-sdk/cmdline-tools && \
