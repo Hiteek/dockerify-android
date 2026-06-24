@@ -110,6 +110,8 @@ install_root() {
   # Root the AVD by patching the ramdisk.
   mkdir -p /tmp/rootavd
   tar -xzf /opt/rootavd.tar.gz --strip-components=1 -C /tmp/rootavd
+  # Use the pinned Magisk version instead of the one bundled with rootAVD.
+  cp /opt/Magisk.zip /tmp/rootavd/Magisk.zip
   pushd /tmp/rootavd
   sed -i 's/read -t 10 choice/choice=1/' rootAVD.sh
   ./rootAVD.sh system-images/android-30/default/x86_64/ramdisk.img

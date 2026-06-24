@@ -29,12 +29,20 @@ ARG NDK_TRANSLATION_REF=chromeos_guybrush
 RUN wget -q -O /opt/ndk-translation.tar.gz \
     "https://codeload.github.com/${NDK_TRANSLATION_REPO}/tar.gz/refs/heads/${NDK_TRANSLATION_REF}"
 
-# Bake in rootAVD (Magisk-based AVD rooting tool).
+# Bake in rootAVD (Magisk-based AVD rooting tool + bundled Magisk.zip).
 # Source: https://gitlab.com/newbit/rootAVD — install_root extracts on demand.
 ARG ROOTAVD_REPO=newbit/rootAVD
 ARG ROOTAVD_REF=master
 RUN wget -q -O /opt/rootavd.tar.gz \
     "https://gitlab.com/${ROOTAVD_REPO}/-/archive/${ROOTAVD_REF}/$(basename "$ROOTAVD_REPO")-${ROOTAVD_REF}.tar.gz"
+
+# Pin the Magisk version: download the chosen release APK (a valid zip) and let
+# install_root drop it in over the Magisk.zip bundled with rootAVD. rootAVD
+# patches the ramdisk with this zip's own magiskboot/magiskinit, so any version
+# works. Newer Magisk ships a single unified `magisk` binary (no magisk32/64).
+ARG MAGISK_VERSION=v30.7
+RUN wget -q -O /opt/Magisk.zip \
+    "https://github.com/topjohnwu/Magisk/releases/download/${MAGISK_VERSION}/Magisk-${MAGISK_VERSION}.apk"
 
 # Set up Android SDK
 RUN mkdir -p /opt/android-sdk/cmdline-tools && \
