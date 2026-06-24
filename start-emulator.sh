@@ -35,7 +35,8 @@ if [ -f "$CONFIG_FILE" ]; then
   if [ -n "$SCREEN_DENSITY" ]; then
     update_config "hw.lcd.density" "$SCREEN_DENSITY"
   fi
+  update_config "hw.mainKeys" "no"
 fi
 
 # Start the emulator with the appropriate ramdisk.img
-/opt/android-sdk/emulator/emulator -avd android -nojni -netfast -writable-system -no-window -no-audio -no-boot-anim -skip-adb-auth -gpu swiftshader_indirect -no-snapshot -no-metrics $RAMDISK -qemu -m ${RAM_SIZE:-4096}
+/opt/android-sdk/emulator/emulator -avd android -nojni -netfast -writable-system -no-window -no-audio -no-boot-anim -skip-adb-auth -gpu swiftshader_indirect -no-snapshot -no-metrics $RAMDISK -prop qemu.hw.mainkeys=0 -qemu -m ${RAM_SIZE:-4096}

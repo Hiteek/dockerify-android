@@ -17,7 +17,7 @@ services:
       #SCREEN_RESOLUTION: 720x720
       # Optional screen density (dpi)
       #SCREEN_DENSITY: 227
-      ROOT_SETUP: 0 # set to 1 to enable rooting
+      ROOT_SETUP: 1 # set to 1 to enable rooting
       GAPPS_SETUP: 0 # set to 1 to install PICO GAPPS
       ARM_TRANSLATION: 1 # set to 1 to enable ARM translation (allows ARM64 apps)
     privileged: true
