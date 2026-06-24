@@ -1,4 +1,7 @@
-FROM ubuntu:20.04
+FROM ubuntu:22.04
+
+# Cloudflare (Ubuntu CDN) blocks apt's default User-Agent — override it.
+RUN echo 'Acquire::http::User-Agent "Mozilla/5.0";' > /etc/apt/apt.conf.d/99useragent
 
 # Install necessary packages
 RUN apt-get update && \
