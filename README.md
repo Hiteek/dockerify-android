@@ -94,6 +94,28 @@ To simplify the setup process, you can use the provided [docker-compose.yml](htt
 
     > **Note:** This command launches the Android emulator and web interface. First boot takes some time to initialize. Once ready, the device will appear in the web interface at http://localhost:8000.
 
+### 🚀 Quick Start (emulator only, without web interface)
+
+If you only need ADB/scrcpy access and don't want the web interface:
+
+1. **Clone the Repository:**
+
+    ```bash
+    git clone https://github.com/Hiteek/dockerify-android.git
+    cd dockerify-android
+    ```
+
+2. **Start only the emulator:**
+
+    ```bash
+    docker compose up -d dockerify-android
+    ```
+
+    > **Note:** The first run builds the Docker image locally (~10-15 min). Subsequent starts use the cached image and are near-instant. Once booted, connect via ADB:
+    > ```bash
+    > adb connect localhost:5555
+    > ```
+
 
 ## 📡 **Usage**
 
